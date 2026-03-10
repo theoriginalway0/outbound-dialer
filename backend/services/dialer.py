@@ -29,7 +29,7 @@ class DialerService:
             self.twilio_from = os.getenv("TWILIO_FROM_NUMBER")
             self.twilio_twiml_url = os.getenv("TWILIO_TWIML_URL")
 
-        elif self.mode == "ringcentral":
+        elif self.mode in ("ringcentral", "btcloudwork"):
             import requests as _requests
             self._requests = _requests
             self.rc_server = os.getenv("RINGCENTRAL_SERVER", "https://platform.ringcentral.com")
@@ -48,7 +48,7 @@ class DialerService:
             return await self._mock_initiate(call_id, phone, db)
         elif self.mode == "twilio":
             return await self._twilio_initiate(call_id, phone, db)
-        elif self.mode == "ringcentral":
+        elif self.mode in ("ringcentral", "btcloudwork"):
             return await self._ringcentral_initiate(call_id, phone, db)
 
     async def hangup_call(self, call_id: int, db: Session) -> None:
@@ -56,7 +56,7 @@ class DialerService:
             await self._mock_hangup(call_id, db)
         elif self.mode == "twilio":
             await self._twilio_hangup(call_id, db)
-        elif self.mode == "ringcentral":
+        elif self.mode in ("ringcentral", "btcloudwork"):
             await self._ringcentral_hangup(call_id, db)
 
     # --- Mock mode ---
@@ -205,14 +205,19 @@ class DialerService:
     # --- RingCentral mode (uses requests directly) ---
 
     def _rc_login_jwt(self, jwt_token: str):
-        """Authenticate with RingCentral using JWT grant."""
-        resp = self._requests.post(
-            f"{self.rc_server}/restapi/oauth/token",
-            data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": jwt_token},
-            auth=(self.rc_client_id, self.rc_client_secret),
-        )
-        resp.raise_for_status()
-        self.rc_access_token = resp.json()["access_token"]
+        """Authenticate with RingCentral/BT Cloud Work using JWT grant."""
+        try:
+            resp = self._requests.post(
+                f"{self.rc_server}/restapi/oauth/token",
+                data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": jwt_token},
+                auth=(self.rc_client_id, self.rc_client_secret),
+            )
+            resp.raise_for_status()
+            self.rc_access_token = resp.json()["access_token"]
+            logger.info("RingCentral/BT Cloud Work JWT authentication successful")
+        except Exception as e:
+            logger.error(f"RingCentral/BT Cloud Work JWT auth failed: {e}")
+            raise
 
     def _rc_headers(self):
         return {"Authorization": f"Bearer {self.rc_access_token}", "Content-Type": "application/json"}
@@ -267,9 +272,13 @@ class DialerService:
                         f"{self.rc_server}/restapi/v1.0/account/~/extension/~/ring-out/{rc_session_id}",
                         headers=self._rc_headers(),
                     )
+                    if not resp.ok:
+                        logger.warning(f"RingCentral status poll returned {resp.status_code} for call {call_id}")
+                        break
                     rc_data = resp.json()
                     callee_status = rc_data.get("status", {}).get("calleeStatus", "InProgress")
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"RingCentral status poll error for call {call_id}: {e}")
                     break
 
                 internal_status = rc_status_map.get(callee_status, "initiated")

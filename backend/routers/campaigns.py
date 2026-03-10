@@ -1,11 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException
+import csv
+import io
+import json
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
 from models import Campaign, CampaignContact, Contact
 from schemas import (
     CampaignCreate, CampaignUpdate, CampaignOut,
-    CampaignListOut, CampaignContactOut,
+    CampaignListOut, CampaignContactOut, CampaignImportResponse,
 )
 
 router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
@@ -28,6 +32,106 @@ def list_campaigns(db: Session = Depends(get_db)):
             contact_count=total, called_count=called,
         ))
     return result
+
+
+@router.post("/import", response_model=CampaignImportResponse)
+async def import_campaign(
+    file: UploadFile = File(...),
+    campaign_name: str = Form(...),
+    column_map: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Import contacts from a CSV file and create a campaign.
+
+    column_map is a JSON string mapping app fields to CSV column headers, e.g.:
+    {"first_name": "First Name", "last_name": "Last Name", "phone": "Phone"}
+    """
+    try:
+        mapping = json.loads(column_map)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid column_map JSON")
+
+    if "phone" not in mapping:
+        raise HTTPException(status_code=400, detail="column_map must include a 'phone' mapping")
+
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+
+    reader = csv.DictReader(io.StringIO(text))
+    csv_headers = reader.fieldnames or []
+
+    for field, csv_col in mapping.items():
+        if csv_col not in csv_headers:
+            raise HTTPException(
+                status_code=400,
+                detail=f"CSV column '{csv_col}' not found. Available: {csv_headers}",
+            )
+
+    campaign = Campaign(name=campaign_name)
+    db.add(campaign)
+    db.flush()
+
+    contacts_created = 0
+    contacts_existing = 0
+    errors = []
+    contact_ids = []
+
+    for row_num, row in enumerate(reader, start=2):
+        phone = (row.get(mapping.get("phone", ""), "") or "").strip()
+        if not phone:
+            errors.append({"row": row_num, "message": "Missing phone number"})
+            continue
+
+        first_name = (row.get(mapping.get("first_name", ""), "") or "").strip()
+        last_name = (row.get(mapping.get("last_name", ""), "") or "").strip()
+
+        if not first_name and not last_name:
+            errors.append({"row": row_num, "message": "Missing both first and last name"})
+            continue
+
+        existing = db.query(Contact).filter(Contact.phone == phone).first()
+        if existing:
+            contacts_existing += 1
+            contact_ids.append(existing.id)
+            continue
+
+        contact = Contact(
+            first_name=first_name or "",
+            last_name=last_name or "",
+            phone=phone,
+            email=(row.get(mapping.get("email", ""), "") or "").strip() or None,
+            company=(row.get(mapping.get("company", ""), "") or "").strip() or None,
+            title=(row.get(mapping.get("title", ""), "") or "").strip() or None,
+        )
+        db.add(contact)
+        db.flush()
+        contacts_created += 1
+        contact_ids.append(contact.id)
+
+    for idx, contact_id in enumerate(contact_ids):
+        existing_cc = (
+            db.query(CampaignContact)
+            .filter(CampaignContact.campaign_id == campaign.id, CampaignContact.contact_id == contact_id)
+            .first()
+        )
+        if not existing_cc:
+            db.add(CampaignContact(
+                campaign_id=campaign.id, contact_id=contact_id, order_index=idx,
+            ))
+
+    db.commit()
+
+    return CampaignImportResponse(
+        campaign_id=campaign.id,
+        campaign_name=campaign.name,
+        contacts_created=contacts_created,
+        contacts_existing=contacts_existing,
+        total_rows=contacts_created + contacts_existing + len(errors),
+        errors=errors,
+    )
 
 
 @router.get("/{campaign_id}", response_model=CampaignOut)

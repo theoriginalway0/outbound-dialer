@@ -114,6 +114,22 @@ class CallOut(BaseModel):
     contact: ContactOut | None = None
 
 
+# --- Campaign Import ---
+
+class ImportError(BaseModel):
+    row: int
+    message: str
+
+
+class CampaignImportResponse(BaseModel):
+    campaign_id: int
+    campaign_name: str
+    contacts_created: int
+    contacts_existing: int
+    total_rows: int
+    errors: list[ImportError] = []
+
+
 # --- Dashboard ---
 
 class DashboardStats(BaseModel):

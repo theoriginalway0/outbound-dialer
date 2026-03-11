@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getCampaigns, createCampaign, deleteCampaign, updateCampaign, getContacts } from '../api'
+import CampaignImportModal from './CampaignImportModal'
 
 export default function CampaignList() {
   const [campaigns, setCampaigns] = useState([])
   const [showModal, setShowModal] = useState(false)
+  const [showImportModal, setShowImportModal] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDesc, setNewDesc] = useState('')
   const [contacts, setContacts] = useState([])
@@ -58,7 +60,10 @@ export default function CampaignList() {
     <div>
       <div className="page-header">
         <h1>Campaigns</h1>
-        <button className="btn btn-primary" onClick={openCreate}>+ New Campaign</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-outline" onClick={() => setShowImportModal(true)}>Import CSV</button>
+          <button className="btn btn-primary" onClick={openCreate}>+ New Campaign</button>
+        </div>
       </div>
 
       <div className="card">
@@ -110,6 +115,13 @@ export default function CampaignList() {
           </table>
         </div>
       </div>
+
+      {showImportModal && (
+        <CampaignImportModal
+          onClose={() => setShowImportModal(false)}
+          onImported={load}
+        />
+      )}
 
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>

@@ -5,3 +5,5 @@ pydantic
 python-dotenv
 twilio
 websockets
+requests
+python-multipart

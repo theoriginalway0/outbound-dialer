@@ -46,6 +46,16 @@ export const skipCampaignContact = (campaignId, contactId) =>
 export const addContactsToCampaign = (campaignId, contactIds) =>
   request(`/campaigns/${campaignId}/contacts`, { method: 'POST', body: JSON.stringify(contactIds) });
 
+export const importCampaign = (formData) =>
+  fetch(`${BASE}/campaigns/import`, { method: 'POST', body: formData })
+    .then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || 'Import failed');
+      }
+      return res.json();
+    });
+
 // Dashboard
 export const getDashboardStats = () => request('/dashboard/stats');
 export const getRecentCalls = () => request('/dashboard/recent-calls');

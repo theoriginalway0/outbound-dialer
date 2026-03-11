@@ -8,7 +8,9 @@ async function request(path, options = {}) {
   if (res.status === 204) return null;
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || 'Request failed');
+    const detail = err.detail;
+    const message = typeof detail === 'string' ? detail : (Array.isArray(detail) ? detail.map(e => e.msg || e.message || JSON.stringify(e)).join('; ') : 'Request failed');
+    throw new Error(message);
   }
   return res.json();
 }

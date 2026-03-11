@@ -155,10 +155,13 @@ def test_connection(payload: dict):
 
     if mode in ("ringcentral", "btcloudwork"):
         import requests
-        server = config.get("RINGCENTRAL_SERVER", "https://platform.ringcentral.com")
-        client_id = config.get("RINGCENTRAL_CLIENT_ID", "")
-        client_secret = config.get("RINGCENTRAL_CLIENT_SECRET", "")
-        jwt_token = config.get("RINGCENTRAL_JWT_TOKEN", "")
+        # Fall back to saved values for fields not included in the payload
+        # (secret fields are masked in the UI and filtered out before sending)
+        saved = _load_saved_settings()
+        server = config.get("RINGCENTRAL_SERVER") or _effective_value("RINGCENTRAL_SERVER", saved) or "https://platform.ringcentral.com"
+        client_id = config.get("RINGCENTRAL_CLIENT_ID") or _effective_value("RINGCENTRAL_CLIENT_ID", saved)
+        client_secret = config.get("RINGCENTRAL_CLIENT_SECRET") or _effective_value("RINGCENTRAL_CLIENT_SECRET", saved)
+        jwt_token = config.get("RINGCENTRAL_JWT_TOKEN") or _effective_value("RINGCENTRAL_JWT_TOKEN", saved)
 
         if not all([client_id, client_secret, jwt_token]):
             return {"success": False, "message": "Client ID, Client Secret, and JWT Token are all required."}

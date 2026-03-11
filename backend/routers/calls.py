@@ -89,7 +89,12 @@ async def initiate_call(data: CallCreate, db: Session = Depends(get_db)):
     db.refresh(call)
 
     # Start the call via the dialer service
-    await dialer.initiate_call(call.id, contact.phone, db)
+    try:
+        await dialer.initiate_call(call.id, contact.phone, db)
+    except Exception as e:
+        call.status = "failed"
+        db.commit()
+        raise HTTPException(status_code=502, detail=f"Failed to initiate call: {e}")
 
     db.refresh(call)
     call.contact = contact

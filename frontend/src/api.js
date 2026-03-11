@@ -30,6 +30,8 @@ export const deleteContact = (id) => request(`/contacts/${id}`, { method: 'DELET
 export const initiateCall = (data) => request('/calls/initiate', { method: 'POST', body: JSON.stringify(data) });
 export const endCall = (id, data) => request(`/calls/${id}/end`, { method: 'POST', body: JSON.stringify(data) });
 export const hangupCall = (id) => request(`/calls/${id}/hangup`, { method: 'POST' });
+export const updateCallStatus = (id, data) => request(`/calls/${id}/status`, { method: 'POST', body: JSON.stringify(data) });
+export const getSipProvision = () => request('/webphone/sip-provision');
 export const getCalls = (params = {}) => {
   const qs = new URLSearchParams(params).toString();
   return request(`/calls${qs ? '?' + qs : ''}`);

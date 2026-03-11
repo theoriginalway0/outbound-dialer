@@ -91,6 +91,7 @@ class CallCreate(BaseModel):
     contact_id: int | None = None
     phone_number: str | None = None
     campaign_id: int | None = None
+    webrtc: bool = False
 
 
 class CallDisposition(BaseModel):

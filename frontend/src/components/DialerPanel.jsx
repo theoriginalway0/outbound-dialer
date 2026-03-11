@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { initiateCall, hangupCall, endCall, getNextCampaignContact, skipCampaignContact } from '../api'
+import { initiateCall, hangupCall, endCall, updateCallStatus, getNextCampaignContact, skipCampaignContact } from '../api'
+import { useWebPhone } from '../hooks/useWebPhone'
 
 const STATES = { IDLE: 'idle', CALLING: 'calling', RINGING: 'ringing', IN_PROGRESS: 'in_progress', WRAP_UP: 'wrap_up' }
 
@@ -20,6 +21,8 @@ export default function DialerPanel() {
   const wsRef = useRef(null)
   const timerRef = useRef(null)
 
+  const { ready: webPhoneReady, makeCall: webPhoneMakeCall, hangup: webPhoneHangup, muted, toggleMute } = useWebPhone()
+
   // WebSocket connection
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -34,11 +37,10 @@ export default function DialerPanel() {
     }
 
     ws.onclose = () => {
-      // Reconnect after a delay
+      // Reconnect after a delay — onmessage will be re-assigned by the other useEffect
       setTimeout(() => {
         if (wsRef.current === ws) {
           const newWs = new WebSocket(`${protocol}//${window.location.host}/ws/call-status`)
-          newWs.onmessage = ws.onmessage
           newWs.onclose = ws.onclose
           wsRef.current = newWs
         }
@@ -112,17 +114,38 @@ export default function DialerPanel() {
       setPhoneNumber(targetContact.phone)
     }
 
+    const dialNumber = targetContact?.phone || phoneNumber
+
     try {
       const payload = {
         campaign_id: campaignMode?.campaignId || null,
+        webrtc: webPhoneReady,
       }
       if (targetContact?.id) {
         payload.contact_id = targetContact.id
       } else {
-        payload.phone_number = phoneNumber
+        payload.phone_number = dialNumber
       }
       const call = await initiateCall(payload)
       setCurrentCall(call)
+
+      if (webPhoneReady) {
+        await webPhoneMakeCall(dialNumber, {
+          onRinging: () => setDialerState(STATES.RINGING),
+          onConnected: () => { setDialerState(STATES.IN_PROGRESS); setTimer(0) },
+          onEnded: async () => {
+            if (timerRef.current) clearInterval(timerRef.current)
+            setDialerState(STATES.WRAP_UP)
+            try { await updateCallStatus(call.id, { status: 'completed' }) } catch {}
+          },
+          onFailed: async () => {
+            setDialerState(STATES.WRAP_UP)
+            try { await updateCallStatus(call.id, { status: 'failed' }) } catch {}
+            setPrefilledDisposition('no_answer')
+            setDisposition('no_answer')
+          },
+        })
+      }
     } catch (err) {
       alert(err.message)
       setDialerState(STATES.IDLE)
@@ -131,12 +154,13 @@ export default function DialerPanel() {
 
   const handleHangup = async () => {
     if (!currentCall) return
+    webPhoneHangup()
     try {
       await hangupCall(currentCall.id)
-      setDialerState(STATES.WRAP_UP)
     } catch (err) {
-      alert(err.message)
+      console.error('Hangup error:', err)
     }
+    setDialerState(STATES.WRAP_UP)
   }
 
   const handleSaveDisposition = async () => {
@@ -251,6 +275,7 @@ export default function DialerPanel() {
         <h3>
           {isActive ? (dialerState === STATES.WRAP_UP ? 'Wrap Up' : 'On Call') : 'Dialer'}
           {campaignMode && <span style={{opacity: 0.7, marginLeft: 8, fontSize: 11}}>Campaign</span>}
+          {webPhoneReady && <span style={{opacity: 0.7, marginLeft: 8, fontSize: 10, color: '#4caf50'}}>● WebRTC</span>}
         </h3>
         <button className="dialer-toggle">{collapsed ? '+' : '-'}</button>
       </div>
@@ -319,11 +344,23 @@ export default function DialerPanel() {
             </button>
           )}
           {(dialerState === STATES.CALLING || dialerState === STATES.RINGING || dialerState === STATES.IN_PROGRESS) && (
-            <button className="btn-call-lg hangup" onClick={handleHangup} title="Hang Up">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.956.956 0 010-1.36C3.69 8.68 7.65 7 12 7s8.31 1.68 11.71 4.72c.18.18.29.44.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 00-2.67-1.85.93.93 0 01-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/>
-              </svg>
-            </button>
+            <>
+              {dialerState === STATES.IN_PROGRESS && webPhoneReady && (
+                <button
+                  className={`btn btn-sm ${muted ? 'btn-primary' : 'btn-outline'}`}
+                  onClick={toggleMute}
+                  title={muted ? 'Unmute' : 'Mute'}
+                  style={{ marginRight: 8 }}
+                >
+                  {muted ? 'Unmute' : 'Mute'}
+                </button>
+              )}
+              <button className="btn-call-lg hangup" onClick={handleHangup} title="Hang Up">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.956.956 0 010-1.36C3.69 8.68 7.65 7 12 7s8.31 1.68 11.71 4.72c.18.18.29.44.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 00-2.67-1.85.93.93 0 01-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/>
+                </svg>
+              </button>
+            </>
           )}
           {campaignMode && dialerState !== STATES.WRAP_UP && (
             <button className="btn btn-sm btn-outline" onClick={handleSkip}>Skip</button>

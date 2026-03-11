@@ -3,11 +3,12 @@ import json
 import os
 import random
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import WebSocket
 from sqlalchemy.orm import Session
 
+from database import SessionLocal
 from models import Call
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,7 @@ class DialerService:
     async def _mock_initiate(self, call_id: int, phone: str, db: Session) -> dict:
         self.active_calls[call_id] = {
             "phone": phone,
-            "started_at": datetime.now(timezone.utc),
+            "started_at": datetime.utcnow(),
         }
         task = asyncio.create_task(self._simulate_call(call_id, db))
         self._tasks[call_id] = task
@@ -108,7 +109,7 @@ class DialerService:
                 await self.broadcast_status(call_id, "in_progress", {})
                 # Call stays active until agent hangs up
             else:
-                now = datetime.now(timezone.utc)
+                now = datetime.utcnow()
                 call.status = "completed"
                 call.disposition = outcome
                 call.ended_at = now
@@ -131,7 +132,7 @@ class DialerService:
 
         call = db.query(Call).filter(Call.id == call_id).first()
         if call and call.status != "completed":
-            now = datetime.now(timezone.utc)
+            now = datetime.utcnow()
             call.status = "completed"
             call.ended_at = now
             call.duration_seconds = int((now - call.started_at).total_seconds()) if call.started_at else 0
@@ -165,7 +166,7 @@ class DialerService:
         if call and call.provider_sid:
             self.twilio_client.calls(call.provider_sid).update(status="completed")
 
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()
         if call and call.status != "completed":
             call.status = "completed"
             call.ended_at = now
@@ -196,7 +197,7 @@ class DialerService:
 
         call.status = internal_status
         if internal_status in ("completed", "failed"):
-            now = datetime.now(timezone.utc)
+            now = datetime.utcnow()
             call.ended_at = now
             call.duration_seconds = int((now - call.started_at).total_seconds()) if call.started_at else 0
             if twilio_status == "busy":
@@ -243,7 +244,7 @@ class DialerService:
             json={
                 "to": {"phoneNumber": phone},
                 "from": {"phoneNumber": self.rc_from_number},
-                "playPrompt": True,
+                "playPrompt": False,
             },
         )
         resp.raise_for_status()
@@ -257,13 +258,14 @@ class DialerService:
 
         self.active_calls[call_id] = {"provider_sid": rc_session_id}
 
-        task = asyncio.create_task(self._poll_ringcentral_status(call_id, rc_session_id, db))
+        task = asyncio.create_task(self._poll_ringcentral_status(call_id, rc_session_id))
         self._tasks[call_id] = task
 
         return {"provider_sid": rc_session_id, "status": "initiated"}
 
-    async def _poll_ringcentral_status(self, call_id: int, rc_session_id: str, db: Session):
+    async def _poll_ringcentral_status(self, call_id: int, rc_session_id: str):
         """Poll RingCentral RingOut status until the call completes."""
+        db = SessionLocal()
         try:
             rc_status_map = {
                 "InProgress": "ringing",
@@ -290,7 +292,11 @@ class DialerService:
                         logger.warning(f"RingCentral status poll returned {resp.status_code} for call {call_id}")
                         break
                     rc_data = resp.json()
-                    callee_status = rc_data.get("status", {}).get("calleeStatus", "InProgress")
+                    status_obj = rc_data.get("status", {})
+                    caller_status = status_obj.get("callerStatus", "")
+                    callee_status = status_obj.get("calleeStatus", "InProgress")
+                    lifecycle = status_obj.get("lifeCycleStatus", "")
+                    logger.info(f"RingOut poll call {call_id}: caller={caller_status} callee={callee_status} lifecycle={lifecycle}")
                 except Exception as e:
                     logger.warning(f"RingCentral status poll error for call {call_id}: {e}")
                     break
@@ -303,7 +309,7 @@ class DialerService:
 
                 call.status = internal_status
                 if internal_status in ("completed", "failed"):
-                    now = datetime.now(timezone.utc)
+                    now = datetime.utcnow()
                     call.ended_at = now
                     call.duration_seconds = int((now - call.started_at).total_seconds()) if call.started_at else 0
                     call.disposition = disposition_map.get(callee_status)
@@ -324,6 +330,8 @@ class DialerService:
             pass
         except Exception as e:
             logger.error(f"Error polling RingCentral status for call {call_id}: {e}")
+        finally:
+            db.close()
 
     async def _ringcentral_hangup(self, call_id: int, db: Session):
         task = self._tasks.pop(call_id, None)
@@ -341,7 +349,7 @@ class DialerService:
                 logger.warning(f"Error cancelling RingCentral RingOut: {e}")
 
         if call and call.status != "completed":
-            now = datetime.now(timezone.utc)
+            now = datetime.utcnow()
             call.status = "completed"
             call.ended_at = now
             call.duration_seconds = int((now - call.started_at).total_seconds()) if call.started_at else 0

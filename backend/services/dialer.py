@@ -15,10 +15,14 @@ logger = logging.getLogger(__name__)
 
 class DialerService:
     def __init__(self):
-        self.mode = os.getenv("DIALER_MODE", "mock")
         self.active_calls: dict[int, dict] = {}
         self.ws_connections: list[WebSocket] = []
         self._tasks: dict[int, asyncio.Task] = {}
+        self._configure()
+
+    def _configure(self):
+        """Load provider settings from environment variables."""
+        self.mode = os.getenv("DIALER_MODE", "mock")
 
         if self.mode == "twilio":
             from twilio.rest import Client
@@ -42,6 +46,11 @@ class DialerService:
                 self._rc_login_jwt(jwt_token)
 
         logger.info(f"Dialer initialized in {self.mode} mode")
+
+    def reconfigure(self):
+        """Re-read environment and reinitialise the provider (called from Settings UI)."""
+        logger.info("Reconfiguring dialer service...")
+        self._configure()
 
     async def initiate_call(self, call_id: int, phone: str, db: Session) -> dict:
         if self.mode == "mock":

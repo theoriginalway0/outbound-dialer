@@ -202,7 +202,12 @@ class DialerService:
             "duration_seconds": call.duration_seconds,
         })
 
-    # --- RingCentral mode (uses requests directly) ---
+    # --- RingCentral / BT Cloud Work mode (uses requests directly) ---
+    # BT Cloud Work is powered by RingCentral and does not have BT-specific APIs.
+    # To integrate, follow the standard RingCentral Developers documentation:
+    # https://developers.ringcentral.com/
+    # Use DIALER_MODE=btcloudwork to label the integration as BT Cloud Work;
+    # the underlying API calls are identical to DIALER_MODE=ringcentral.
 
     def _rc_login_jwt(self, jwt_token: str):
         """Authenticate with RingCentral/BT Cloud Work using JWT grant."""

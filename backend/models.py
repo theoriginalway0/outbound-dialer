@@ -64,8 +64,9 @@ class Call(Base):
     __tablename__ = "calls"
 
     id = Column(Integer, primary_key=True, index=True)
-    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=False)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
     campaign_id = Column(Integer, ForeignKey("campaigns.id"), nullable=True)
+    phone_number = Column(String(20), nullable=True)
     direction = Column(String(10), default="outbound")
     status = Column(String(20), default="initiated")
     disposition = Column(String(20), nullable=True)

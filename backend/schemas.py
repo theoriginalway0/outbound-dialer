@@ -88,7 +88,8 @@ class CampaignListOut(BaseModel):
 # --- Call ---
 
 class CallCreate(BaseModel):
-    contact_id: int
+    contact_id: int | None = None
+    phone_number: str | None = None
     campaign_id: int | None = None
 
 
@@ -100,8 +101,9 @@ class CallDisposition(BaseModel):
 class CallOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    contact_id: int
+    contact_id: int | None = None
     campaign_id: int | None = None
+    phone_number: str | None = None
     direction: str
     status: str
     disposition: str | None = None

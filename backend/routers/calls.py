@@ -66,9 +66,17 @@ def get_call(call_id: int, db: Session = Depends(get_db)):
 async def initiate_call(data: CallCreate, db: Session = Depends(get_db)):
     dialer = get_dialer()
 
-    contact = db.query(Contact).filter(Contact.id == data.contact_id).first()
-    if not contact:
-        raise HTTPException(status_code=404, detail="Contact not found")
+    contact = None
+    dial_number = data.phone_number
+
+    if data.contact_id:
+        contact = db.query(Contact).filter(Contact.id == data.contact_id).first()
+        if not contact:
+            raise HTTPException(status_code=404, detail="Contact not found")
+        dial_number = contact.phone
+
+    if not dial_number:
+        raise HTTPException(status_code=422, detail="Phone number or contact is required")
 
     # Check for existing active call
     active = (
@@ -82,6 +90,7 @@ async def initiate_call(data: CallCreate, db: Session = Depends(get_db)):
     call = Call(
         contact_id=data.contact_id,
         campaign_id=data.campaign_id,
+        phone_number=dial_number,
         status="initiated",
     )
     db.add(call)
@@ -90,14 +99,15 @@ async def initiate_call(data: CallCreate, db: Session = Depends(get_db)):
 
     # Start the call via the dialer service
     try:
-        await dialer.initiate_call(call.id, contact.phone, db)
+        await dialer.initiate_call(call.id, dial_number, db)
     except Exception as e:
         call.status = "failed"
         db.commit()
         raise HTTPException(status_code=502, detail=f"Failed to initiate call: {e}")
 
     db.refresh(call)
-    call.contact = contact
+    if contact:
+        call.contact = contact
     return call
 
 

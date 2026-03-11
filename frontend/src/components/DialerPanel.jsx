@@ -113,10 +113,15 @@ export default function DialerPanel() {
     }
 
     try {
-      const call = await initiateCall({
-        contact_id: targetContact?.id,
+      const payload = {
         campaign_id: campaignMode?.campaignId || null,
-      })
+      }
+      if (targetContact?.id) {
+        payload.contact_id = targetContact.id
+      } else {
+        payload.phone_number = phoneNumber
+      }
+      const call = await initiateCall(payload)
       setCurrentCall(call)
     } catch (err) {
       alert(err.message)

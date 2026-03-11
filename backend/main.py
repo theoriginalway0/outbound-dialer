@@ -6,10 +6,11 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
+load_dotenv(dotenv_path=".env.local", override=True)  # UI-saved settings take precedence
 
 from database import create_tables, get_db
 from services.dialer import DialerService
-from routers import contacts, campaigns, calls, dashboard
+from routers import contacts, campaigns, calls, dashboard, settings, webphone
 
 dialer_service = DialerService()
 
@@ -18,6 +19,7 @@ dialer_service = DialerService()
 async def lifespan(app: FastAPI):
     create_tables()
     calls.set_dialer_service(dialer_service)
+    webphone.set_dialer_service(dialer_service)
     yield
 
 
@@ -35,6 +37,8 @@ app.include_router(contacts.router)
 app.include_router(campaigns.router)
 app.include_router(calls.router)
 app.include_router(dashboard.router)
+app.include_router(settings.router)
+app.include_router(webphone.router)
 
 
 @app.websocket("/ws/call-status")

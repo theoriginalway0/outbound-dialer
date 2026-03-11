@@ -66,9 +66,17 @@ def get_call(call_id: int, db: Session = Depends(get_db)):
 async def initiate_call(data: CallCreate, db: Session = Depends(get_db)):
     dialer = get_dialer()
 
-    contact = db.query(Contact).filter(Contact.id == data.contact_id).first()
-    if not contact:
-        raise HTTPException(status_code=404, detail="Contact not found")
+    contact = None
+    dial_number = data.phone_number
+
+    if data.contact_id:
+        contact = db.query(Contact).filter(Contact.id == data.contact_id).first()
+        if not contact:
+            raise HTTPException(status_code=404, detail="Contact not found")
+        dial_number = contact.phone
+
+    if not dial_number:
+        raise HTTPException(status_code=422, detail="Phone number or contact is required")
 
     # Check for existing active call
     active = (
@@ -82,17 +90,25 @@ async def initiate_call(data: CallCreate, db: Session = Depends(get_db)):
     call = Call(
         contact_id=data.contact_id,
         campaign_id=data.campaign_id,
+        phone_number=dial_number,
         status="initiated",
     )
     db.add(call)
     db.commit()
     db.refresh(call)
 
-    # Start the call via the dialer service
-    await dialer.initiate_call(call.id, contact.phone, db)
+    # Start the call via the dialer service (skip if WebRTC handles it client-side)
+    if not data.webrtc:
+        try:
+            await dialer.initiate_call(call.id, dial_number, db)
+        except Exception as e:
+            call.status = "failed"
+            db.commit()
+            raise HTTPException(status_code=502, detail=f"Failed to initiate call: {e}")
 
     db.refresh(call)
-    call.contact = contact
+    if contact:
+        call.contact = contact
     return call
 
 
@@ -104,7 +120,8 @@ async def hangup_call(call_id: int, db: Session = Depends(get_db)):
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
     if call.status not in ("initiated", "ringing", "in_progress"):
-        raise HTTPException(status_code=400, detail="Call is not active")
+        # Call already completed (e.g. polling task finished it before UI updated)
+        return call
 
     await dialer.hangup_call(call.id, db)
 
@@ -143,4 +160,34 @@ def end_call(call_id: int, data: CallDisposition, db: Session = Depends(get_db))
 
     db.commit()
     db.refresh(call)
+    return call
+
+
+@router.post("/{call_id}/status", response_model=CallOut)
+async def update_call_status(call_id: int, data: dict, db: Session = Depends(get_db)):
+    """Update call status from WebRTC client events."""
+    call = db.query(Call).options(joinedload(Call.contact)).filter(Call.id == call_id).first()
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    status = data.get("status")
+    if not status:
+        raise HTTPException(status_code=422, detail="status required")
+
+    call.status = status
+    if status in ("completed", "failed"):
+        now = datetime.utcnow()
+        if not call.ended_at:
+            call.ended_at = now
+        if call.started_at and call.ended_at:
+            call.duration_seconds = int((call.ended_at - call.started_at).total_seconds())
+
+    db.commit()
+    db.refresh(call)
+
+    dialer = get_dialer()
+    await dialer.broadcast_status(call_id, status, {
+        "duration_seconds": call.duration_seconds,
+    })
+
     return call

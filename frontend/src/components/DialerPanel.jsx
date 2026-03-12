@@ -1,165 +1,99 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { initiateCall, hangupCall, endCall, updateCallStatus, getNextCampaignContact, skipCampaignContact } from '../api'
-import { useWebPhone } from '../hooks/useWebPhone'
+import { useState, useEffect, useRef, useCallback } from "react"
+import { initiateCall, hangupCall, endCall, updateCallStatus, getNextCampaignContact, skipCampaignContact } from "../api"
+import { useWebPhone } from "../hooks/useWebPhone"
+import { Phone, PhoneOff, ChevronDown, ChevronUp, Mic, MicOff, SkipForward } from "lucide-react"
 
-const STATES = { IDLE: 'idle', CALLING: 'calling', RINGING: 'ringing', IN_PROGRESS: 'in_progress', WRAP_UP: 'wrap_up' }
+const STATES = { IDLE: "idle", CALLING: "calling", RINGING: "ringing", IN_PROGRESS: "in_progress", WRAP_UP: "wrap_up" }
+const cls = (...a) => a.filter(Boolean).join(" ")
 
 export default function DialerPanel() {
   const [collapsed, setCollapsed] = useState(false)
   const [dialerState, setDialerState] = useState(STATES.IDLE)
-  const [phoneNumber, setPhoneNumber] = useState('')
+  const [phoneNumber, setPhoneNumber] = useState("")
   const [currentCall, setCurrentCall] = useState(null)
   const [currentContact, setCurrentContact] = useState(null)
   const [timer, setTimer] = useState(0)
-  const [disposition, setDisposition] = useState('')
-  const [notes, setNotes] = useState('')
-  const [prefilledDisposition, setPrefilledDisposition] = useState(null)
-
-  // Campaign mode
-  const [campaignMode, setCampaignMode] = useState(null) // { campaignId, campaignName }
-
+  const [disposition, setDisposition] = useState("")
+  const [notes, setNotes] = useState("")
+  const [campaignMode, setCampaignMode] = useState(null)
   const wsRef = useRef(null)
   const timerRef = useRef(null)
-
   const { ready: webPhoneReady, makeCall: webPhoneMakeCall, hangup: webPhoneHangup, muted, toggleMute } = useWebPhone()
 
-  // WebSocket connection
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/call-status`)
-    wsRef.current = ws
-
-    ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data)
-      if (msg.type === 'call_status' && currentCall && msg.call_id === currentCall.id) {
-        handleStatusUpdate(msg.status, msg.data)
-      }
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:"
+    const connect = () => {
+      const ws = new WebSocket(proto + "//" + window.location.host + "/ws/call-status")
+      wsRef.current = ws
+      ws.onclose = () => setTimeout(connect, 3000)
     }
-
-    ws.onclose = () => {
-      // Reconnect after a delay — onmessage will be re-assigned by the other useEffect
-      setTimeout(() => {
-        if (wsRef.current === ws) {
-          const newWs = new WebSocket(`${protocol}//${window.location.host}/ws/call-status`)
-          newWs.onclose = ws.onclose
-          wsRef.current = newWs
-        }
-      }, 3000)
-    }
-
-    return () => { ws.close() }
+    connect()
+    return () => wsRef.current?.close()
   }, [])
 
-  // Update WS handler when currentCall changes
   useEffect(() => {
     if (wsRef.current) {
-      wsRef.current.onmessage = (event) => {
-        const msg = JSON.parse(event.data)
-        if (msg.type === 'call_status') {
-          handleStatusUpdate(msg.status, msg.data)
-        }
+      wsRef.current.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data)
+        if (msg.type === "call_status") handleStatusUpdate(msg.status, msg.data)
       }
     }
   }, [currentCall])
 
-  // Timer
   useEffect(() => {
     if (dialerState === STATES.IN_PROGRESS) {
       timerRef.current = setInterval(() => setTimer(t => t + 1), 1000)
     } else {
-      if (timerRef.current) clearInterval(timerRef.current)
+      clearInterval(timerRef.current)
     }
-    return () => { if (timerRef.current) clearInterval(timerRef.current) }
+    return () => clearInterval(timerRef.current)
   }, [dialerState])
 
   const handleStatusUpdate = useCallback((status, data) => {
-    if (status === 'ringing') {
-      setDialerState(STATES.RINGING)
-    } else if (status === 'in_progress') {
-      setDialerState(STATES.IN_PROGRESS)
-      setTimer(0)
-    } else if (status === 'completed' || status === 'failed') {
-      if (timerRef.current) clearInterval(timerRef.current)
+    if (status === "ringing") setDialerState(STATES.RINGING)
+    else if (status === "in_progress") { setDialerState(STATES.IN_PROGRESS); setTimer(0) }
+    else if (status === "completed" || status === "failed") {
+      clearInterval(timerRef.current)
       setDialerState(STATES.WRAP_UP)
-      if (data?.disposition) {
-        setPrefilledDisposition(data.disposition)
-        setDisposition(data.disposition)
-      }
+      if (data?.disposition) setDisposition(data.disposition)
     }
   }, [])
 
-  const formatTime = (seconds) => {
-    const m = Math.floor(seconds / 60).toString().padStart(2, '0')
-    const s = (seconds % 60).toString().padStart(2, '0')
-    return `${m}:${s}`
-  }
-
-  const handleKeypadPress = (key) => {
-    setPhoneNumber(prev => prev + key)
-  }
+  const fmt = (s) => Math.floor(s/60).toString().padStart(2,"0") + ":" + (s%60).toString().padStart(2,"0")
 
   const handleCall = async (contact = null) => {
     setCollapsed(false)
-    const targetContact = contact || currentContact
-    if (!targetContact && !phoneNumber) return
-
-    setDialerState(STATES.CALLING)
-    setTimer(0)
-    setDisposition('')
-    setNotes('')
-    setPrefilledDisposition(null)
-
-    if (targetContact) {
-      setCurrentContact(targetContact)
-      setPhoneNumber(targetContact.phone)
-    }
-
-    const dialNumber = targetContact?.phone || phoneNumber
-
+    const c = contact || currentContact
+    if (!c && !phoneNumber) return
+    setDialerState(STATES.CALLING); setTimer(0); setDisposition(""); setNotes("")
+    if (c) { setCurrentContact(c); setPhoneNumber(c.phone) }
+    const num = c?.phone || phoneNumber
     try {
-      const payload = {
-        campaign_id: campaignMode?.campaignId || null,
-        webrtc: webPhoneReady,
-      }
-      if (targetContact?.id) {
-        payload.contact_id = targetContact.id
-      } else {
-        payload.phone_number = dialNumber
-      }
+      const payload = { campaign_id: campaignMode?.campaignId || null, webrtc: webPhoneReady }
+      if (c?.id) payload.contact_id = c.id; else payload.phone_number = num
       const call = await initiateCall(payload)
       setCurrentCall(call)
-
       if (webPhoneReady) {
-        await webPhoneMakeCall(dialNumber, {
+        await webPhoneMakeCall(num, {
           onRinging: () => setDialerState(STATES.RINGING),
           onConnected: () => { setDialerState(STATES.IN_PROGRESS); setTimer(0) },
           onEnded: async () => {
-            if (timerRef.current) clearInterval(timerRef.current)
-            setDialerState(STATES.WRAP_UP)
-            try { await updateCallStatus(call.id, { status: 'completed' }) } catch {}
+            clearInterval(timerRef.current); setDialerState(STATES.WRAP_UP)
+            try { await updateCallStatus(call.id, { status: "completed" }) } catch {}
           },
           onFailed: async () => {
             setDialerState(STATES.WRAP_UP)
-            try { await updateCallStatus(call.id, { status: 'failed' }) } catch {}
-            setPrefilledDisposition('no_answer')
-            setDisposition('no_answer')
+            try { await updateCallStatus(call.id, { status: "failed" }) } catch {}
+            setDisposition("no_answer")
           },
         })
       }
-    } catch (err) {
-      alert(err.message)
-      setDialerState(STATES.IDLE)
-    }
+    } catch (err) { alert(err.message); setDialerState(STATES.IDLE) }
   }
 
   const handleHangup = async () => {
-    if (!currentCall) return
     webPhoneHangup()
-    try {
-      await hangupCall(currentCall.id)
-    } catch (err) {
-      console.error('Hangup error:', err)
-    }
+    try { await hangupCall(currentCall.id) } catch {}
     setDialerState(STATES.WRAP_UP)
   }
 
@@ -167,216 +101,157 @@ export default function DialerPanel() {
     if (!currentCall || !disposition) return
     try {
       await endCall(currentCall.id, { disposition, notes })
-      setDialerState(STATES.IDLE)
-      setCurrentCall(null)
-      setTimer(0)
-
-      // Campaign auto-advance
-      if (campaignMode) {
-        await advanceToNext()
-      } else {
-        setCurrentContact(null)
-        setPhoneNumber('')
-      }
-    } catch (err) {
-      alert(err.message)
-    }
+      setDialerState(STATES.IDLE); setCurrentCall(null); setTimer(0)
+      if (campaignMode) await advanceToNext()
+      else { setCurrentContact(null); setPhoneNumber("") }
+    } catch (err) { alert(err.message) }
   }
 
   const advanceToNext = async () => {
-    if (!campaignMode) return
     try {
       const next = await getNextCampaignContact(campaignMode.campaignId)
-      setCurrentContact(next.contact)
-      setPhoneNumber(next.contact.phone)
-      // Auto-dial after brief pause
+      setCurrentContact(next.contact); setPhoneNumber(next.contact.phone)
       setTimeout(() => handleCall(next.contact), 2000)
     } catch {
-      // No more contacts
-      setCampaignMode(null)
-      setCurrentContact(null)
-      setPhoneNumber('')
-      alert('Campaign complete! No more contacts to dial.')
+      setCampaignMode(null); setCurrentContact(null); setPhoneNumber("")
+      alert("Campaign complete! No more contacts.")
     }
   }
 
   const handleSkip = async () => {
     if (!campaignMode || !currentContact) return
-
-    // If a call is active, hang up first
-    if (currentCall && dialerState !== STATES.IDLE && dialerState !== STATES.WRAP_UP) {
+    if (currentCall && ![STATES.IDLE, STATES.WRAP_UP].includes(dialerState))
       await hangupCall(currentCall.id).catch(() => {})
-    }
-
     try {
       await skipCampaignContact(campaignMode.campaignId, currentContact.id)
-      setDialerState(STATES.IDLE)
-      setCurrentCall(null)
-      setTimer(0)
+      setDialerState(STATES.IDLE); setCurrentCall(null); setTimer(0)
       await advanceToNext()
-    } catch (err) {
-      alert(err.message)
-    }
+    } catch (err) { alert(err.message) }
   }
 
-  const handlePauseCampaign = () => {
-    setCampaignMode(null)
-    if (dialerState === STATES.IDLE) {
-      setCurrentContact(null)
-      setPhoneNumber('')
-    }
-  }
-
-  // Expose methods for other components via window events
   useEffect(() => {
-    const handleDialEvent = (e) => {
-      const { contact, campaignId, campaignName } = e.detail
-      if (campaignId) {
-        setCampaignMode({ campaignId, campaignName })
-      }
+    const onDial = (e) => {
+      const { contact, campaignId, campaignName, autoCall } = e.detail
+      if (campaignId) setCampaignMode({ campaignId, campaignName })
       if (contact) {
-        setCurrentContact(contact)
-        setPhoneNumber(contact.phone)
-        setCollapsed(false)
-        if (e.detail.autoCall) {
-          handleCall(contact)
-        }
+        setCurrentContact(contact); setPhoneNumber(contact.phone); setCollapsed(false)
+        if (autoCall) handleCall(contact)
       }
     }
-
-    const handleStartCampaign = async (e) => {
+    const onStart = async (e) => {
       const { campaignId, campaignName } = e.detail
-      setCampaignMode({ campaignId, campaignName })
-      setCollapsed(false)
+      setCampaignMode({ campaignId, campaignName }); setCollapsed(false)
       try {
         const next = await getNextCampaignContact(campaignId)
-        setCurrentContact(next.contact)
-        setPhoneNumber(next.contact.phone)
+        setCurrentContact(next.contact); setPhoneNumber(next.contact.phone)
         setTimeout(() => handleCall(next.contact), 1000)
-      } catch {
-        alert('No pending contacts in this campaign.')
-        setCampaignMode(null)
-      }
+      } catch { alert("No pending contacts."); setCampaignMode(null) }
     }
-
-    window.addEventListener('dialer:call', handleDialEvent)
-    window.addEventListener('dialer:startCampaign', handleStartCampaign)
+    window.addEventListener("dialer:call", onDial)
+    window.addEventListener("dialer:startCampaign", onStart)
     return () => {
-      window.removeEventListener('dialer:call', handleDialEvent)
-      window.removeEventListener('dialer:startCampaign', handleStartCampaign)
+      window.removeEventListener("dialer:call", onDial)
+      window.removeEventListener("dialer:startCampaign", onStart)
     }
   }, [campaignMode])
 
-  const isActive = dialerState !== STATES.IDLE
+  const isOnCall = [STATES.CALLING, STATES.RINGING, STATES.IN_PROGRESS].includes(dialerState)
+  const grad = isOnCall ? "from-green-600 to-green-700" : dialerState === STATES.WRAP_UP ? "from-amber-500 to-amber-600" : "from-blue-600 to-blue-700"
+  const inp = "w-full h-9 px-3 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
 
   return (
-    <div className="dialer-panel">
-      <div className="dialer-header" onClick={() => setCollapsed(!collapsed)}>
-        <h3>
-          {isActive ? (dialerState === STATES.WRAP_UP ? 'Wrap Up' : 'On Call') : 'Dialer'}
-          {campaignMode && <span style={{opacity: 0.7, marginLeft: 8, fontSize: 11}}>Campaign</span>}
-          {webPhoneReady && <span style={{opacity: 0.7, marginLeft: 8, fontSize: 10, color: '#4caf50'}}>● WebRTC</span>}
-        </h3>
-        <button className="dialer-toggle">{collapsed ? '+' : '-'}</button>
+    <div className={cls("fixed bottom-5 right-5 z-50 w-[360px] bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-[0_8px_40px_rgba(0,0,0,0.18)]", isOnCall && "dialer-active-ring")}>
+      <div className={cls("flex items-center justify-between px-4 py-3 rounded-t-2xl cursor-pointer select-none bg-gradient-to-r", grad)} onClick={() => setCollapsed(!collapsed)}>
+        <div className="flex items-center gap-2">
+          <Phone className="w-4 h-4 text-white" />
+          <span className="text-sm font-semibold text-white">
+            {dialerState === STATES.IDLE ? "Dialer" : dialerState === STATES.WRAP_UP ? "Wrap Up" : "On Call"}
+          </span>
+          {campaignMode && <span className="text-xs text-white/70">· {campaignMode.campaignName}</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          {webPhoneReady && (
+            <span className="flex items-center gap-1 text-xs text-green-300">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block" />WebRTC
+            </span>
+          )}
+          {collapsed ? <ChevronUp className="w-4 h-4 text-white/80" /> : <ChevronDown className="w-4 h-4 text-white/80" />}
+        </div>
       </div>
 
-      <div className={`dialer-body${collapsed ? ' collapsed' : ''}`}>
-        {/* Campaign bar */}
-        {campaignMode && (
-          <div className="dialer-campaign-bar">
-            <span>{campaignMode.campaignName}</span>
-            <button className="btn btn-sm btn-outline" onClick={handlePauseCampaign}>Pause</button>
-          </div>
-        )}
-
-        {/* Contact info */}
-        {currentContact && (
-          <div className="dialer-contact">
-            <div className="name">{currentContact.first_name} {currentContact.last_name}</div>
-            <div className="phone">{currentContact.phone}</div>
-            {currentContact.company && <div className="company">{currentContact.company}</div>}
-          </div>
-        )}
-
-        {/* Status display */}
-        {dialerState !== STATES.IDLE && dialerState !== STATES.WRAP_UP && (
-          <div className="dialer-status">
-            <div className={`status-text ${dialerState}`}>
-              {dialerState === STATES.CALLING && 'Initiating...'}
-              {dialerState === STATES.RINGING && 'Ringing...'}
-              {dialerState === STATES.IN_PROGRESS && 'Connected'}
+      {!collapsed && (
+        <div className="p-4 space-y-3">
+          {campaignMode && (
+            <div className="flex items-center justify-between px-3 py-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
+              <span className="text-xs font-medium text-blue-700 dark:text-blue-300">{campaignMode.campaignName}</span>
+              <button onClick={() => { setCampaignMode(null); if (dialerState === STATES.IDLE) { setCurrentContact(null); setPhoneNumber("") } }} className="text-xs text-blue-600 hover:underline">Pause</button>
             </div>
-            {dialerState === STATES.IN_PROGRESS && (
-              <div className="dialer-timer">{formatTime(timer)}</div>
-            )}
-          </div>
-        )}
-
-        {/* Idle state: keypad + phone input */}
-        {dialerState === STATES.IDLE && (
-          <>
-            <div className="phone-input-row">
-              <input
-                type="tel"
-                className="form-control"
-                placeholder="Phone number..."
-                value={phoneNumber}
-                onChange={e => setPhoneNumber(e.target.value)}
-              />
-            </div>
-            <div className="keypad">
-              {['1','2','3','4','5','6','7','8','9','*','0','#'].map(key => (
-                <button key={key} className="keypad-btn" onClick={() => handleKeypadPress(key)}>
-                  {key}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-
-        {/* Action buttons */}
-        <div className="dialer-actions">
-          {dialerState === STATES.IDLE && (
-            <button className="btn-call-lg call" onClick={() => handleCall()} title="Call">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/>
-              </svg>
-            </button>
           )}
-          {(dialerState === STATES.CALLING || dialerState === STATES.RINGING || dialerState === STATES.IN_PROGRESS) && (
-            <>
-              {dialerState === STATES.IN_PROGRESS && webPhoneReady && (
-                <button
-                  className={`btn btn-sm ${muted ? 'btn-primary' : 'btn-outline'}`}
-                  onClick={toggleMute}
-                  title={muted ? 'Unmute' : 'Mute'}
-                  style={{ marginRight: 8 }}
-                >
-                  {muted ? 'Unmute' : 'Mute'}
-                </button>
+
+          {currentContact && (
+            <div className="px-3 py-2.5 bg-slate-50 dark:bg-slate-800 rounded-lg">
+              <div className="font-semibold text-sm text-slate-900 dark:text-slate-100">{currentContact.first_name} {currentContact.last_name}</div>
+              <div className="text-xs text-slate-500 mt-0.5">{currentContact.phone}</div>
+              {currentContact.company && <div className="text-xs text-slate-400">{currentContact.company}</div>}
+            </div>
+          )}
+
+          {isOnCall && (
+            <div className="flex items-center justify-between px-3 py-2.5 bg-slate-50 dark:bg-slate-800 rounded-lg">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  {dialerState === STATES.CALLING && "Initiating..."}
+                  {dialerState === STATES.RINGING && "Ringing..."}
+                  {dialerState === STATES.IN_PROGRESS && "Connected"}
+                </span>
+              </div>
+              {dialerState === STATES.IN_PROGRESS && (
+                <span className="text-sm font-mono font-bold text-slate-900 dark:text-slate-100">{fmt(timer)}</span>
               )}
-              <button className="btn-call-lg hangup" onClick={handleHangup} title="Hang Up">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.956.956 0 010-1.36C3.69 8.68 7.65 7 12 7s8.31 1.68 11.71 4.72c.18.18.29.44.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 00-2.67-1.85.93.93 0 01-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/>
-                </svg>
-              </button>
+            </div>
+          )}
+
+          {dialerState === STATES.IDLE && (
+            <>
+              <input type="tel" className={inp} placeholder="Enter phone number..." value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} />
+              <div className="grid grid-cols-3 gap-1.5">
+                {["1","2","3","4","5","6","7","8","9","*","0","#"].map(k => (
+                  <button key={k} onClick={() => setPhoneNumber(p => p + k)} className="h-10 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium text-base active:scale-95 transition-all">{k}</button>
+                ))}
+              </div>
             </>
           )}
-          {campaignMode && dialerState !== STATES.WRAP_UP && (
-            <button className="btn btn-sm btn-outline" onClick={handleSkip}>Skip</button>
-          )}
-        </div>
 
-        {/* Wrap-up / Disposition form */}
-        {dialerState === STATES.WRAP_UP && (
-          <div className="disposition-form">
-            <h4>Call Disposition</h4>
-            <div className="form-group">
-              <select
-                className="form-control"
-                value={disposition}
-                onChange={e => setDisposition(e.target.value)}
-              >
+          <div className="flex items-center justify-center gap-3 pt-1">
+            {dialerState === STATES.IDLE && (
+              <button onClick={() => handleCall()} className="w-14 h-14 rounded-full bg-green-500 hover:bg-green-600 text-white flex items-center justify-center shadow-lg shadow-green-500/30 active:scale-95 transition-all">
+                <Phone className="w-6 h-6" />
+              </button>
+            )}
+            {isOnCall && (
+              <>
+                {dialerState === STATES.IN_PROGRESS && webPhoneReady && (
+                  <button onClick={toggleMute} className={cls("w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-95", muted ? "bg-red-500 text-white shadow-lg shadow-red-500/30" : "bg-slate-100 dark:bg-slate-800 text-slate-600 hover:bg-slate-200 dark:hover:bg-slate-700")}>
+                    {muted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                  </button>
+                )}
+                <button onClick={handleHangup} className="w-14 h-14 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center shadow-lg shadow-red-500/30 active:scale-95 transition-all">
+                  <PhoneOff className="w-6 h-6" />
+                </button>
+                {campaignMode && (
+                  <button onClick={handleSkip} className="w-10 h-10 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center transition-all active:scale-95">
+                    <SkipForward className="w-4 h-4" />
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+
+          {dialerState === STATES.WRAP_UP && (
+            <div className="space-y-2.5">
+              <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Call Disposition</div>
+              <select className={inp} value={disposition} onChange={e => setDisposition(e.target.value)}>
                 <option value="">Select outcome...</option>
                 <option value="answered">Answered</option>
                 <option value="voicemail">Voicemail</option>
@@ -385,27 +260,19 @@ export default function DialerPanel() {
                 <option value="callback">Callback</option>
                 <option value="not_interested">Not Interested</option>
               </select>
+              <textarea className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none" placeholder="Notes..." value={notes} onChange={e => setNotes(e.target.value)} rows={2} />
+              <div className="flex gap-2">
+                <button onClick={handleSaveDisposition} disabled={!disposition} className="flex-1 h-9 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors">
+                  {campaignMode ? "Save & Next" : "Save"}
+                </button>
+                {campaignMode && (
+                  <button onClick={handleSkip} className="h-9 px-3 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800 text-sm transition-colors">Skip</button>
+                )}
+              </div>
             </div>
-            <div className="form-group">
-              <textarea
-                className="form-control"
-                placeholder="Notes..."
-                value={notes}
-                onChange={e => setNotes(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <div className="form-actions">
-              <button className="btn btn-primary" onClick={handleSaveDisposition} disabled={!disposition}>
-                {campaignMode ? 'Save & Next' : 'Save'}
-              </button>
-              {campaignMode && (
-                <button className="btn btn-outline" onClick={handleSkip}>Skip</button>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

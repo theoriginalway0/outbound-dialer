@@ -294,7 +294,7 @@ class DialerService:
                     rc_data = resp.json()
                     status_obj = rc_data.get("status", {})
                     caller_status = status_obj.get("callerStatus", "")
-                    callee_status = status_obj.get("calleeStatus", "InProgress")
+                    callee_status = status_obj.get("calleeStatus", "")
                     lifecycle = status_obj.get("lifeCycleStatus", "")
                     logger.info(f"RingOut poll call {call_id}: caller={caller_status} callee={callee_status} lifecycle={lifecycle}")
                 except Exception as e:

@@ -1,9 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 
-/**
- * Manages a RingCentral WebRTC WebPhone session.
- * Falls back silently if not in RC/BT Cloud Work mode or if SIP provision fails.
- */
 export function useWebPhone() {
   const [ready, setReady] = useState(false)
   const [initializing, setInitializing] = useState(false)
@@ -18,36 +14,25 @@ export function useWebPhone() {
 
     const init = async () => {
       try {
-        // Fetch SIP credentials — fails silently if not in RC mode
         const res = await fetch('/api/webphone/sip-provision')
-        if (!res.ok) return  // Not in RC mode, fall back to RingOut
-        const sipData = await res.json()
+        if (!res.ok) return
+        const data = await res.json()
         if (!mounted) return
 
-        fromNumberRef.current = sipData._fromNumber || ''
+        fromNumberRef.current = data._fromNumber || ''
+        // RingCentral provision returns sipInfo as an array; v2 SDK expects one object
+        const sipInfo = Array.isArray(data.sipInfo) ? data.sipInfo[0] : data.sipInfo
 
-        const { default: RCWebPhone } = await import('@ringcentral/web-phone')
-
-        const webPhone = new RCWebPhone(sipData, {
-          appKey: sipData._clientId,
-          appName: 'OutboundDialer',
-          appVersion: '1.0.0',
-          enableMidLinesInSDP: true,
-          audioHelper: { enabled: true, incoming: null, outgoing: null },
-        })
+        const { default: WebPhone } = await import('ringcentral-web-phone')
+        const webPhone = new WebPhone({ sipInfo })
 
         if (!mounted) {
-          webPhone.userAgent.stop()
+          try { await webPhone.dispose() } catch {}
           return
         }
 
         webPhoneRef.current = webPhone
-
-        await new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => reject(new Error('Registration timeout')), 30000)
-          webPhone.userAgent.once('registered', () => { clearTimeout(timeout); resolve() })
-          webPhone.userAgent.once('registrationFailed', (err) => { clearTimeout(timeout); reject(err) })
-        })
+        await webPhone.start()
 
         if (mounted) {
           setReady(true)
@@ -65,7 +50,7 @@ export function useWebPhone() {
     return () => {
       mounted = false
       if (webPhoneRef.current) {
-        try { webPhoneRef.current.userAgent.stop() } catch {}
+        try { webPhoneRef.current.dispose() } catch {}
         webPhoneRef.current = null
       }
       setReady(false)
@@ -76,46 +61,44 @@ export function useWebPhone() {
   const makeCall = useCallback(async (phoneNumber, { onRinging, onConnected, onEnded, onFailed } = {}) => {
     if (!webPhoneRef.current || !ready) throw new Error('WebPhone not ready')
 
-    // Normalise to E.164 for UK numbers
+    // Normalise to E.164 (handles UK numbers starting with 0 or 00)
     let num = phoneNumber.replace(/[\s\-().]/g, '')
-    if (num.startsWith('00')) {
-      num = '+' + num.slice(2)
-    } else if (num.startsWith('0') && num.length <= 11) {
-      num = '+44' + num.slice(1)
-    } else if (!num.startsWith('+')) {
-      num = '+' + num
-    }
+    if (num.startsWith('00')) num = '+' + num.slice(2)
+    else if (num.startsWith('0') && num.length <= 11) num = '+44' + num.slice(1)
+    else if (!num.startsWith('+')) num = '+' + num
 
-    const session = webPhoneRef.current.userAgent.invite(num, {
-      fromNumber: fromNumberRef.current,
-    })
+    // For BT/Vodafone accounts, webPhone.call() remains pending until answered.
+    // Subscribe to 'outboundCall' first so we get the session object immediately
+    // (while the phone is still ringing) to allow hangup before answer.
+    const onOutbound = (callSession) => {
+      sessionRef.current = callSession
+      setMuted(false)
+      onRinging?.()
 
-    sessionRef.current = session
-    setMuted(false)
-
-    session.on('progress', () => onRinging?.())
-    session.on('accepted', () => onConnected?.())
-    session.on('bye', () => {
-      sessionRef.current = null
-      onEnded?.()
-    })
-    session.on('failed', (response, cause) => {
-      sessionRef.current = null
-      onFailed?.(cause || 'Call failed')
-    })
-    session.on('terminated', () => {
-      if (sessionRef.current) {
+      callSession.once('answered', () => onConnected?.())
+      callSession.once('disposed', () => {
         sessionRef.current = null
         onEnded?.()
-      }
-    })
+      })
+      callSession.once('failed', () => {
+        sessionRef.current = null
+        onFailed?.()
+      })
+    }
 
-    return session
+    webPhoneRef.current.once('outboundCall', onOutbound)
+
+    try {
+      await webPhoneRef.current.call(num, fromNumberRef.current || undefined)
+    } catch (err) {
+      webPhoneRef.current.off('outboundCall', onOutbound)
+      throw err
+    }
   }, [ready])
 
-  const hangup = useCallback(() => {
+  const hangup = useCallback(async () => {
     if (sessionRef.current) {
-      try { sessionRef.current.terminate() } catch {}
+      try { await sessionRef.current.hangup() } catch {}
       sessionRef.current = null
     }
   }, [])
